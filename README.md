@@ -10,7 +10,7 @@ We conducted a comprehensive data analysis project applying various statistical 
 - Application of Analytical Methodologies: Faced with data incompleteness, the presence of multiple covariates, and the potential for unobserved confounders despite being an RCT, we collaborated with team members to study various statistical methodologies. In particular, we implemented Propensity Score Matching (PSM) and Inverse Probability Weighting (IPW) to balance the covariates and executed Instrumental Variable (IV) analysis to address the issue of unobserved confounders.
 - Outcome Derivation: The analysis showed that program participation significantly improved the likelihood of employee promotions. Specifically, using distance as an instrumental variable in IV analysis, we were able to identify the impact of distance on training participation rates.
 
-![Untitled](https://github.com/haydenlee914/Fraud-Detection-Competition/assets/140643142/0ffc6b86-e94c-41da-b88e-0dc39c6d32e7)
+![Untitled](https://github.com/haydenlee914/AB-Test-Analysis/assets/140643142/ad28721f-08ea-4bbb-9938-dbf795f53d45)
 
 ## *Learning and Strategic Recommendations*
 
