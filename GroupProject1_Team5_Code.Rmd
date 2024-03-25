@@ -1,0 +1,480 @@
+---
+title: "Causal Inference Project 1"
+author: "Yaeeun"
+date: "2024-03-20"
+output: html_document
+---
+
+## Data Preparation 
+
+```{r}
+# Install packages
+packages_needed <- c("tableone", "Matching", "fastDummies", "survey")
+packages_to_install <- packages_needed[!(packages_needed %in% installed.packages()[,"Package"])]
+if(length(packages_to_install)) install.packages(packages_to_install)
+
+# Load the packages
+library(tableone)
+library(Matching)
+library(fastDummies)
+library(survey)
+```
+
+```{r}
+# Load Data
+file_path <- "C:/Users/heyri/OneDrive/Desktop/TrainingPromoData.csv"
+tpd <- read.csv(file_path)
+
+```
+
+```{r}
+# Check for missing values in the dataset
+missing_values_summary <- sapply(tpd, function(x) sum(is.na(x)))
+
+# Print the summary of missing values for each column
+print(missing_values_summary)
+
+```
+
+```{r}
+# Function to cap outliers
+cap_outliers <- function(x, lower_perc = 0.01, upper_perc = 0.99) {
+  quantiles <- quantile(x, probs = c(lower_perc, upper_perc), na.rm = TRUE)
+  x <- ifelse(x < quantiles[1], quantiles[1], x)
+  x <- ifelse(x > quantiles[2], quantiles[2], x)
+  return(x)
+}
+
+# Apply the function to numeric columns only
+numeric_columns <- sapply(tpd, is.numeric) # Identify numeric columns
+tpd[numeric_columns] <- lapply(tpd[numeric_columns], cap_outliers)
+
+# Optionally, check the effect on a specific column, e.g., 'weight', 'height'
+summary(tpd$weight)
+summary(tpd$height)
+summary(tpd$disthome)
+summary(tpd$testscore)
+
+```
+
+## Unmatched
+
+```{r}
+## Covariates
+vars <- c("manager","raise","salary","children","mstatus","age","sex","edu","vacation","weight","height","hrfriend","cxofriend","insurance","flexspend","retcont","race", "disthome", "testscore")
+
+## Construct a Table 1
+tabUnmatched <- CreateTableOne(vars = vars, strata = "training", data = tpd, test = FALSE)
+
+## Show table with SMD
+print(tabUnmatched, smd = TRUE)
+```
+
+## 1:1 Matching
+
+```{r}
+## Transform categorical variables to dummy variables 
+covX <- dummy_cols(tpd[vars], select_columns=c("manager","raise","salary","mstatus","sex","hrfriend","cxofriend","insurance","flexspend","retcont","race"),remove_selected_columns=TRUE,remove_first_dummy=TRUE)
+
+set.seed(314159) ## Set random number seed
+
+## Perform 1:1 Matching
+listMatch <- Match(Tr = (tpd$training == "Yes"),  
+	       X = covX,
+	       M = 1,
+	       #caliper = 1.24,
+                   replace  = FALSE,
+                   ties     = TRUE,
+                   version  = "fast")
+
+## Extract matched data
+tpdMatched <- tpd[unlist(listMatch[c("index.treated","index.control")]), ]
+
+tabMatched <- CreateTableOne(vars = vars, strata = "training", data = tpdMatched, test = FALSE)
+
+print(tabMatched, smd = TRUE)
+
+```
+
+## 1:1 Matching with Caliper
+```{r}
+## Transform categorical variables to dummy variables 
+covX <- dummy_cols(tpd[vars], select_columns=c("manager","raise","salary","mstatus","sex","hrfriend","cxofriend","insurance","flexspend","retcont","race"),remove_selected_columns=TRUE,remove_first_dummy=TRUE)
+
+set.seed(314159) ## Set random number seed
+
+## Perform 1:1 Matching
+listMatchc <- Match(Tr = (tpd$training == "Yes"),  
+	       X = covX,
+	       M = 1,
+	       caliper = 1.24,
+                   replace  = FALSE,
+                   ties     = TRUE,
+                   version  = "fast")
+
+## Extract matched data
+tpdMatchedc <- tpd[unlist(listMatchc[c("index.treated","index.control")]), ]
+
+tabMatchedc <- CreateTableOne(vars = vars, strata = "training", data = tpdMatchedc, test = FALSE)
+
+print(tabMatchedc, smd = TRUE)
+
+```
+
+## 1:2 Matching with caliper
+
+```{r}
+## Perform 1:2 Matching
+listMatch1k <- Match(Tr = (tpd$training == "Yes"),  
+	       X = covX,
+	       M = 2,
+	       caliper = 1.24,
+	       replace  = TRUE,
+	       ties     = TRUE,
+	       version  = "fast")
+
+## Extract matched data
+tpdMatched1k <- tpd[unlist(listMatch1k[c("index.treated","index.control")]), ]
+
+tabMatched1k <- CreateTableOne(vars = vars, strata = "training", data = tpdMatched1k, test = FALSE)
+
+print(tabMatched1k, smd = TRUE)
+
+```
+
+## Propensity Matching
+
+```{r}
+## Fit propensity score model
+psModel <- glm(formula = (training == "Yes") ~ manager+raise+salary+children
+               +mstatus+age+sex+edu+vacation+weight+height+hrfriend+cxofriend
+               +insurance+flexspend+retcont+race+disthome+testscore, 
+               family  = binomial(link = "logit"),
+               data    = tpd)
+
+## Predicted probability of being assigned to Train
+tpd$pTrain <- predict(psModel, type = "response")
+## Predicted probability of being assigned to no Train
+tpd$pNoTrain <- 1 - tpd$pTrain
+
+
+#create plot to check overlap
+hTrain = hist(tpd$pTrain[tpd$training=="Yes"], plot=FALSE,breaks=20)
+hNoTrain = hist(tpd$pTrain[tpd$training=="No"], plot=FALSE,breaks=20)
+hNoTrain$counts = - hNoTrain$counts
+hmax = max(hTrain$counts)
+hmin = min(hNoTrain$counts)
+plotx = c(hTrain$breaks, hNoTrain$breaks)
+xmax = max(plotx)
+xmin = min(plotx)
+plot(hTrain, ylim=c(hmin, hmax), col="Green", xlim=c(xmin, xmax), xlab='propensity score',main="",yaxt='n',ylab='')
+lines(hNoTrain, col="blue")
+
+set.seed(314159) ## Set random number seed
+
+## Perform 1:1 Propensity Score Matching
+listPSMatch <- Match(Tr = (tpd$training == "Yes"), X = log(tpd$pTrain / tpd$pNoTrain),
+	       M = 1, caliper = 0.01, replace  = FALSE, ties     = TRUE, version  = "fast")
+
+## Extract matched data
+tpdPSMatched <- tpd[unlist(listPSMatch[c("index.treated","index.control")]), ]
+
+## Construct a table
+tabPSMatched <- CreateTableOne(vars = vars, strata = "training", data = tpdPSMatched, test = FALSE)
+## Show table with SMD
+print(tabPSMatched, smd = TRUE)
+
+```
+
+
+```{r}
+## Unmatched model
+glmUnmatched <- glm(formula = (promoted == "Yes") ~ training,
+                     family  = binomial(link = "logit"),
+                     data    = tpd)
+
+## Matched model
+glmMatched <- glm(formula = (promoted == "Yes") ~ training,
+                   family  = binomial(link = "logit"),
+                   data    = tpdMatched)
+
+## Matched model (caliper=1.1)
+glmMatchedc <- glm(formula = (promoted == "Yes") ~ training,
+                   family  = binomial(link = "logit"),
+                   data    = tpdMatchedc)
+
+## Propensity Score Matched model (caliper=0.01)
+glmMatched1k <- glm(formula = (promoted == "Yes") ~ training,
+                   family  = binomial(link = "logit"),
+                   data    = tpdMatched1k)
+
+## Propensity Score Matched model (caliper=0.01)
+glmPSMatched <- glm(formula = (promoted == "Yes") ~ training,
+                   family  = binomial(link = "logit"),
+                   data    = tpdPSMatched)
+
+## Show results together
+resTogether <- list(Unmatched = ShowRegTable(glmUnmatched, printToggle = FALSE),
+                    Matched   = ShowRegTable(glmMatched, printToggle = FALSE),
+                    Matchedc   = ShowRegTable(glmMatchedc, printToggle = FALSE),
+                    Matched1k   = ShowRegTable(glmMatched1k, printToggle = FALSE),
+                    PSMatched   = ShowRegTable(glmPSMatched, printToggle = FALSE))
+print(resTogether, quote = FALSE)
+
+```
+
+
+## Outcome Analysis: McNemar Test
+```{r}
+# Assuming every odd row in tpdPSMatched is a treated unit and every even row is the matched control
+
+# Extract binary outcomes for promoted, ensure it's numeric
+tpdPSMatched$promoted_binary <- as.numeric(tpdPSMatched$promoted == "Yes")
+
+# Extract outcomes for treated and their matched controls
+# Odd rows for treated, even rows for controls
+treated_outcomes <- tpdPSMatched$promoted_binary[seq(1, nrow(tpdPSMatched), by = 2)]
+control_outcomes <- tpdPSMatched$promoted_binary[seq(2, nrow(tpdPSMatched), by = 2)]
+
+# Create a contingency table for the matched pairs
+# The table has the format:
+#                Control
+# Treated      No   Yes
+#    No       a     b
+#    Yes      c     d
+contingency_table <- table(Treated = treated_outcomes, Control = control_outcomes)
+
+# Perform the McNemar test
+mcnemar_test <- mcnemar.test(contingency_table)
+
+# Print the results
+print(mcnemar_test)
+
+```
+
+## Sensitivity Analysis
+### propensity score is stable
+
+```{r}
+# Extracting the coefficient for the treatment variable
+coef_summary <- summary(glmPSMatched)$coefficients
+
+# Assuming 'training' is coded as a binary variable where "Yes" = 1
+# and it's the variable of interest in your model
+# Extract the estimate and standard error for 'training'
+log_odds_training <- coef_summary["trainingYes", "Estimate"]
+se_log_odds_training <- coef_summary["trainingYes", "Std. Error"]
+
+# Calculate the odds ratio for 'training'
+or_training <- exp(log_odds_training)
+
+# Calculate the 95% CI for the odds ratio
+ci_lower <- exp(log_odds_training - 1.96 * se_log_odds_training)
+ci_upper <- exp(log_odds_training + 1.96 * se_log_odds_training)
+
+# Print the odds ratio and its 95% CI
+cat("Odds Ratio for Training: ", or_training, "\n")
+cat("95% CI: [", ci_lower, ", ", ci_upper, "]\n")
+```
+```{r}
+if (!requireNamespace("EValue", quietly = TRUE)) install.packages("EValue")
+library(EValue)
+
+```
+
+```{r}
+or_training
+ci_lower
+```
+```{r}
+# Assuming 'or_training' is your calculated Odds Ratio for the training effect
+# and 'ci_lower' is the lower bound of its 95% confidence interval
+e_val_result <- evalues.OR(or_training, ci_lower, ci_upper, rare=FALSE)
+
+# Print the E-value results
+print(e_val_result)
+```
+
+
+
+## IPW
+
+```{r}
+# Step 1: Recode 'promoted' to a binary numeric variable
+tpd$promoted_binary <- as.numeric(tpd$promoted == "Yes")
+
+# Step 2: Make sure 'training' is a factor with two levels
+tpd$training <- factor(tpd$training, levels = c("No", "Yes"))
+
+# Step 3: Estimate the propensity score
+# Assuming the psModel has been fit correctly before
+tpd$propensity_score <- predict(psModel, type = "response")
+
+# Step 4: Calculate the weights for IPW
+tpd$weights <- ifelse(tpd$training == "Yes", 1 / tpd$propensity_score, 1 / (1 - tpd$propensity_score))
+
+# Step 5: Create survey design object using these weights
+design <- svydesign(ids = ~1, data = tpd, weights = ~weights)
+
+# Step 6: Estimate the weighted outcomes for treated and control using the binary outcome variable
+weighted_model <- svyglm(promoted_binary ~ training, design = design, family = quasibinomial())
+
+# View the summary of the weighted model
+summary(weighted_model)
+
+```
+
+```{r}
+# Calculate the odds ratio for the 'trainingYes' coefficient
+odds_ratio <- exp(0.89267)
+odds_ratio
+```
+
+
+```{r}
+## Unmatched model
+glmUnmatched <- glm(formula = (promoted == "Yes") ~ training,
+                     family  = binomial(link = "logit"),
+                     data    = tpd)
+
+## Matched model
+glmMatched <- glm(formula = (promoted == "Yes") ~ training,
+                   family  = binomial(link = "logit"),
+                   data    = tpdMatched)
+
+## Matched model (caliper=1.1)
+glmMatchedc <- glm(formula = (promoted == "Yes") ~ training,
+                   family  = binomial(link = "logit"),
+                   data    = tpdMatchedc)
+
+## Propensity Score Matched model (caliper=0.01)
+glmMatched1k <- glm(formula = (promoted == "Yes") ~ training,
+                   family  = binomial(link = "logit"),
+                   data    = tpdMatched1k)
+
+## Propensity Score Matched model (caliper=0.01)
+glmPSMatched <- glm(formula = (promoted == "Yes") ~ training,
+                   family  = binomial(link = "logit"),
+                   data    = tpdPSMatched)
+
+## Weighted model
+glmWeighted <- svyglm(formula = (promoted == "Yes") ~ training,
+                      family  = binomial(link = "logit"),
+                      design    = design)
+
+## Show results together
+resTogether <- list(Unmatched = ShowRegTable(glmUnmatched, printToggle = FALSE),
+                    Matched   = ShowRegTable(glmMatched, printToggle = FALSE),
+                    Matchedc   = ShowRegTable(glmMatchedc, printToggle = FALSE),
+                    Matched1k   = ShowRegTable(glmMatched1k, printToggle = FALSE),
+                    PSMatched   = ShowRegTable(glmPSMatched, printToggle = FALSE),
+                    Weighted  = ShowRegTable(glmWeighted, printToggle = FALSE))
+print(resTogether, quote = FALSE)
+
+```
+
+
+## IV Analysis 
+### IV = "disthome"
+```{r}
+# Install AER package
+install.packages("AER")
+
+# Load the AER package for instrumental variables regression
+library(AER)
+
+# Define covariates
+covariates <- c("manager", "raise", "salary", "children", "mstatus", "age", 
+                "sex", "edu", "vacation", "weight", "height", "hrfriend", 
+                "cxofriend", "insurance", "flexspend", "retcont", "race", "testscore")
+```
+
+```{r}
+
+# Convert 'training' to a factor if it's not already
+tpd$training <- factor(tpd$training)
+
+# Ensure 'promoted_binary' has been correctly converted
+tpd$promoted_binary <- as.numeric(tpd$promoted == "Yes")
+
+# Define the covariates as a single string
+covariate_formula_part <- paste(covariates, collapse = " + ")
+
+# Create the full formula as a string first
+formula_string <- paste("promoted_binary ~ training +", covariate_formula_part)
+
+# Convert the string to a formula
+regression_formula <- as.formula(formula_string)
+
+# Now fit the model using the created formula
+naive_model <- glm(regression_formula, data = tpd, family = binomial())
+
+# Check the summary of the model
+summary(naive_model)
+
+exp(naive_model$coefficients["trainingYes"])
+
+```
+
+
+
+```{r}
+
+# Fit the first stage model
+# Adjust your model to use glm() for logistic regression
+stage1_model <- glm(training ~ disthome + manager + raise + salary + 
+                      children + mstatus + age + sex + edu + vacation + weight + 
+                      height + hrfriend + cxofriend + insurance + flexspend + retcont + 
+                      race, data = tpd, family = binomial())
+
+# View the summary of the logistic model
+summary(stage1_model)
+
+cor.test(unclass(tpd$disthome), tpd$promoted_binary)
+```
+
+
+```{r}
+# Assuming stage1_model is your first stage logistic regression model
+predicted_training_prob <- predict(stage1_model, type = "response")
+
+# Adding the predicted probabilities back to your original dataframe for use in Stage 2
+tpd$predicted_training_prob <- predicted_training_prob
+
+# For Stage 2, you want to predict 'promoted' using the predicted treatment probability
+# and other control variables. Since 'promoted' is binary, we'll still use glm with binomial family.
+
+stage2_model <- glm(promoted_binary ~ predicted_training_prob + manager + raise + salary + 
+                    children + mstatus + age + sex + edu + vacation + weight + 
+                    height + hrfriend + cxofriend + insurance + flexspend + retcont + 
+                    race, data = tpd, family = binomial())
+
+# View the summary of the Stage 2 model
+summary(stage2_model)
+
+exp(stage2_model$coefficients["predicted_training_prob"])
+
+```
+
+```{r}
+
+# Assuming 'promoted' is your binary outcome variable, 'training' is your binary treatment variable,
+# 'disthome' is your instrumental variable, and you have other control variables (covariates).
+
+# Fitting the ivreg model
+iv_model <- ivreg(promoted_binary ~ training + manager + raise + salary +
+                  children + mstatus + age + sex + edu + vacation + weight +
+                  height + hrfriend + cxofriend + insurance + flexspend + retcont +
+                  race | disthome + manager + raise + salary +
+                  children + mstatus + age + sex + edu + vacation + weight +
+                  height + hrfriend + cxofriend + insurance + flexspend + retcont +
+                  race, data = tpd)
+
+# Summary of the ivreg model, which includes diagnostics on the instrument
+summary(iv_model, diagnostics = TRUE)
+
+```
+
+
+
+
